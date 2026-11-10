@@ -5,6 +5,7 @@ import {
   type Moneda, type Nivel, type Producto,
 } from "./engine/capital";
 import { store, type Ticket } from "./engine/store";
+import { generarEventos, cuadra, ristraPipe, ristraJSON, type EventoContable } from "./engine/ristras";
 import {
   PRODUCTOS, productoPorId, CLIENTES, clientePorRut,
   USDCLP_OBS, UF_DIA,
@@ -336,6 +337,9 @@ export function App() {
           </div>
         </div>
 
+        {/* ===== CONTABILIDAD · RISTRAS ===== */}
+        <Contabilidad par={par} tickets={st.tickets} />
+
         <div className="notice" style={{ marginBottom: 24 }}>
           <b>Fase 1 (hoy):</b> consumo de capital, doble pozo y hard-stop. <b>Fase 2 (tras contratación):</b> splits en cascada, utilidades, ristras y asientos contables. ·
           Demo: pozos editables + feed RT simulado; el motor CMF corre en USD y convierte a CLP con el observado.
@@ -541,6 +545,147 @@ function GrillaRegulatoria(props: { par: number }) {
           {esMonto ? <> para <b>{fmtMoney(notional, cur, par)}</b> de nocional</> : <> como % del nocional</>}.
           {metodo === "saccr" && <> Ej: Forward simple a 360d → PFE {fmtPct(addonFactor(360), 1)} (vs {fmtPct(addTramo, 1)} del lineal a corto): el plazo largo es mucho más ácido.</>}
           {" "}La métrica <b>PFE</b> es la que vos ves; el <b>capital</b> es la fracción que inmoviliza la CMF.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Contabilidad · Ristras pasivas
+// ---------------------------------------------------------------------------
+function addDias(d: Date, n: number) { const x = new Date(d); x.setDate(x.getDate() + n); return x; }
+const iso = (d: Date) => d.toISOString().slice(0, 10);
+
+function Contabilidad(props: { par: number; tickets: Ticket[] }) {
+  const { par, tickets } = props;
+  const [sel, setSel] = useState<string>(tickets[0]?.id ?? "sample");
+  const [fmt, setFmt] = useState<"pipe" | "json">("pipe");
+  const [tab, setTab] = useState(0);
+
+  const t = tickets.find((x) => x.id === sel) ?? null;
+  // Base en USD, se contabiliza en CLP (×paridad)
+  const notUsd = t ? t.notionalUsd : 1_000_000;
+  const utilUsd = t ? t.notionalUsd * (t.spreadPips / 10000) : 12_000;
+  const tenor = t ? t.tenorDias : 180;
+  const idMadre = "EM-" + (t ? t.id.toUpperCase() : "SAMPLE1");
+
+  const [utilidad, setUtilidad] = useState(Math.round(utilUsd * par));
+  const [comision, setComision] = useState(Math.round(utilUsd * par * 0.15));
+  const [mtm, setMtm] = useState(Math.round(utilUsd * par * 1.4));
+
+  // recalcular defaults al cambiar de ticket
+  const key = idMadre + "|" + notUsd + "|" + utilUsd;
+  const [lastKey, setLastKey] = useState(key);
+  if (key !== lastKey) {
+    setLastKey(key);
+    setUtilidad(Math.round(utilUsd * par));
+    setComision(Math.round(utilUsd * par * 0.15));
+    setMtm(Math.round(utilUsd * par * 1.4));
+  }
+
+  const hoy = new Date();
+  const eventos = generarEventos({
+    idMadre,
+    nocional: Math.round(notUsd * par),
+    utilidad, comision, mtmVal: mtm,
+    fecha0: iso(hoy), fechaVal: iso(addDias(hoy, Math.round(tenor / 2))), fechaVto: iso(addDias(hoy, tenor)),
+    moneda: "CLP",
+  });
+  const ev = eventos[tab];
+  const q = cuadra(ev);
+  const texto = fmt === "pipe" ? ristraPipe(ev) : ristraJSON(ev);
+  const todo = eventos.map((e) => (fmt === "pipe" ? ristraPipe(e) : ristraJSON(e))).join(fmt === "pipe" ? "\n" : ",\n");
+
+  const copiar = (txt: string) => { try { navigator.clipboard.writeText(txt); } catch {} };
+  const descargar = (txt: string, name: string) => {
+    try {
+      const blob = new Blob([txt], { type: "text/plain" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a"); a.href = url; a.download = name; a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 500);
+    } catch {}
+  };
+
+  const money = (v: number) => "$" + Math.round(v).toLocaleString("es-CL");
+  const tabs = ["R0 · Apertura (T0)", "R1 · Valorización", "R2 · Liquidación"];
+
+  return (
+    <div className="panel">
+      <div className="panel-head">
+        <h2>Contabilidad · Ristras pasivas</h2>
+        <span className="spacer" />
+        <span className="hint">indexado por ID_Estructura_Madre · doble partida que cuadra</span>
+      </div>
+      <div className="panel-body">
+        <div className="grid c4" style={{ marginBottom: 10 }}>
+          <label className="field"><span className="lbl">Estructura madre</span>
+            <select value={sel} onChange={(e) => setSel(e.target.value)}>
+              {tickets.length === 0 && <option value="sample">Ejemplo (1 Mio, 180d)</option>}
+              {tickets.map((x) => <option key={x.id} value={x.id}>EM-{x.id.toUpperCase()} · {x.razon}</option>)}
+            </select>
+          </label>
+          <label className="field"><span className="lbl">Utilidad / spread (CLP)</span>
+            <input type="number" value={utilidad} onChange={(e) => setUtilidad(Number(e.target.value))} /></label>
+          <label className="field"><span className="lbl">Comisión split (CLP)</span>
+            <input type="number" value={comision} onChange={(e) => setComision(Number(e.target.value))} /></label>
+          <label className="field"><span className="lbl">MtM valorización (CLP)</span>
+            <input type="number" value={mtm} onChange={(e) => setMtm(Number(e.target.value))} /></label>
+        </div>
+
+        <div className="row-inline" style={{ justifyContent: "space-between", marginBottom: 10 }}>
+          <div className="seg">
+            {tabs.map((tt, i) => (
+              <button key={i} className={tab === i ? "on" : ""} onClick={() => setTab(i)}>{tt}</button>
+            ))}
+          </div>
+          <div className="seg">
+            <button className={fmt === "pipe" ? "on" : ""} onClick={() => setFmt("pipe")}>Pipe</button>
+            <button className={fmt === "json" ? "on" : ""} onClick={() => setFmt("json")}>JSON</button>
+          </div>
+        </div>
+
+        {/* Asiento */}
+        <div className="mono" style={{ fontSize: 11, color: "var(--text-dim)", marginBottom: 6 }}>
+          {idMadre} · {ev.hitoCod} · {ev.fecha}
+        </div>
+        <table className="tbl">
+          <thead><tr><th>Cuenta</th><th>Glosa</th><th className="num">Debe</th><th className="num">Haber</th></tr></thead>
+          <tbody>
+            {ev.lineas.map((l, i) => (
+              <tr key={i}>
+                <td className="mono">{l.cuenta} <span className="dim">{l.nombre}</span></td>
+                <td className="dim">{l.glosa}</td>
+                <td className="num">{l.debe ? money(l.debe) : ""}</td>
+                <td className="num">{l.haber ? money(l.haber) : ""}</td>
+              </tr>
+            ))}
+            <tr className="sumrow">
+              <td colSpan={2}>{q.ok ? <span className="safe">✓ Cuadra (Debe = Haber)</span> : <span className="kill">✗ No cuadra</span>}</td>
+              <td className="num">{money(q.debe)}</td>
+              <td className="num">{money(q.haber)}</td>
+            </tr>
+          </tbody>
+        </table>
+
+        {/* Ristra */}
+        <div className="mono" style={{ fontSize: 10, textTransform: "uppercase", color: "var(--text-muted)", margin: "12px 0 4px" }}>
+          Ristra {fmt === "pipe" ? "plana (pipe |)" : "JSON modular"} — ID|SEQ|HITO|FECHA|LINEA|CUENTA|GLOSA|DEBE|HABER|MONEDA
+        </div>
+        <pre style={{
+          fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--text)", background: "var(--bg-input)",
+          border: "1px solid var(--border-strong)", borderRadius: "var(--radius-sm)", padding: "10px 12px",
+          overflowX: "auto", margin: 0, whiteSpace: "pre",
+        }}>{texto}</pre>
+        <div className="btn-row" style={{ marginTop: 8 }}>
+          <button className="btn" onClick={() => copiar(texto)}>Copiar este evento</button>
+          <button className="btn" onClick={() => copiar(todo)}>Copiar los 3 eventos</button>
+          <button className="btn ghost" onClick={() => descargar(todo, idMadre + (fmt === "pipe" ? ".ristra.txt" : ".ristra.json"))}>Descargar ristra</button>
+        </div>
+
+        <div className="notice" style={{ marginTop: 10 }}>
+          <b>Cómo se envía:</b> <b>R0</b> en el día cero (apertura + split); <b>R1</b> es el ajuste por valorización (MtM a fecha); <b>R2</b> reversa las cuentas de orden y realiza contra caja al vencimiento.
+          Cada evento <b>cuadra Debe = Haber</b> y la R2 revierte lo abierto → <b>no se duplica ni queda nada fuera</b>. Si el software se retira, las glosas registradas quedan intactas en el ERP; solo se apaga el cálculo automático.
         </div>
       </div>
     </div>
