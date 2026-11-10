@@ -243,8 +243,11 @@ export function fmtMoney(usd: number, moneda: Moneda, paridad: number): string {
   if (moneda === "CLP") {
     return sign + "$" + Math.round(abs).toLocaleString("es-CL");
   }
-  // USD con separador y sin decimales salvo montos chicos
-  return sign + "US$" + (abs >= 1000 ? Math.round(abs).toLocaleString("en-US") : abs.toFixed(2));
+  // USD con separador; decimales solo si el monto chico no es entero
+  const small = Math.round(abs * 100) / 100;
+  return sign + "US$" + (abs >= 1000
+    ? Math.round(abs).toLocaleString("en-US")
+    : (Number.isInteger(small) ? small.toLocaleString("en-US") : small.toFixed(2)));
 }
 
 export function fmtPct(x: number, dec = 1): string {

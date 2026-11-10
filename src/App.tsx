@@ -162,6 +162,9 @@ export function App() {
           />
         </div>
 
+        {/* ===== GRILLA BASE (la que manda) ===== */}
+        <GrillaBase par={par} />
+
         {/* ===== QUICK QUOTE ===== */}
         <div className="panel">
           <div className="panel-head">
@@ -398,6 +401,75 @@ function CascadaPozo(props: {
           </tr>
         </tbody>
       </table>
+    </div>
+  );
+}
+
+// Grilla base de referencia: consumo por nocional estándar, por plazo y moneda.
+const TENORS_REF = [7, 15, 30, 60, 90, 120, 180, 360];
+
+function GrillaBase(props: { par: number }) {
+  const { par } = props;
+  const [notional, setNotional] = useState(1_000_000);
+  const [prodId, setProdId] = useState(PRODUCTOS[0].id);
+  const [modo, setModo] = useState<"patas" | "estructura">("patas");
+  const producto = productoPorId(prodId);
+  const rows = TENORS_REF.map((t) => {
+    const c = calcularTicket(producto, notional, t, modo);
+    return { t, addon: c.addon, expUsd: c.exposicionUsd, reqUsd: c.requerimientoUsd };
+  });
+  const maxReq = Math.max(1, ...rows.map((r) => r.reqUsd));
+  return (
+    <div className="panel">
+      <div className="panel-head">
+        <h2>Grilla base · consumo por nocional <span className="muted" style={{ fontWeight: 400 }}>(la que manda)</span></h2>
+        <span className="spacer" />
+        <span className="hint">requerimiento CMF + exposición por plazo · USD/CLP</span>
+      </div>
+      <div className="panel-body">
+        <div className="grid c3" style={{ marginBottom: 12 }}>
+          <label className="field"><span className="lbl">Nocional ref. USD</span>
+            <input type="number" value={notional} step={100000} onChange={(e) => setNotional(Number(e.target.value))} /></label>
+          <label className="field"><span className="lbl">Producto</span>
+            <select value={prodId} onChange={(e) => setProdId(e.target.value)}>
+              {PRODUCTOS.map((p) => <option key={p.id} value={p.id}>{p.nombre}</option>)}
+            </select></label>
+          <label className="field"><span className="lbl">Add-on por</span>
+            <div className="seg">
+              <button className={modo === "patas" ? "on" : ""} onClick={() => setModo("patas")}>Patas</button>
+              <button className={modo === "estructura" ? "on" : ""} onClick={() => setModo("estructura")}>Estructura</button>
+            </div>
+          </label>
+        </div>
+        <table className="tbl">
+          <thead>
+            <tr>
+              <th>Plazo</th><th className="num">Add-on</th>
+              <th className="num">Exposición USD</th><th className="num">Exposición CLP</th>
+              <th className="num">Req. CMF USD</th><th className="num">Req. CMF CLP</th><th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => {
+              const tramo = r.addon === PARAMS_CMF.addonTramoPct;
+              return (
+                <tr key={r.t}>
+                  <td>{r.t}d {tramo && <span className="badge coto" style={{ marginLeft: 4 }}>15–90</span>}</td>
+                  <td className="num">{fmtPct(r.addon * 100, 1)}</td>
+                  <td className="num dim">{fmtMoney(r.expUsd, "USD", par)}</td>
+                  <td className="num dim">{fmtMoney(r.expUsd, "CLP", par)}</td>
+                  <td className="num" style={{ color: "var(--signal)" }}>{fmtMoney(r.reqUsd, "USD", par)}</td>
+                  <td className="num" style={{ color: "var(--signal)" }}>{fmtMoney(r.reqUsd, "CLP", par)}</td>
+                  <td style={{ width: 70 }}><span className="cellbar" style={{ width: (r.reqUsd / maxReq) * 60 + "px" }} /></td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+        <div className="notice" style={{ marginTop: 10 }}>
+          Lectura rápida: cuánto capital inmoviliza <b>US${notional.toLocaleString("en-US")}</b> de <b>{producto.nombre}</b> según el plazo. El tramo <b>15–90d</b> calibra el add-on a 1,0%.
+        </div>
+      </div>
     </div>
   );
 }
