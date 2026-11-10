@@ -7,6 +7,10 @@ import {
 import { store, type Ticket } from "./engine/store";
 import { generarEventos, cuadra, ristraPipe, ristraJSON, type EventoContable } from "./engine/ristras";
 import {
+  AUDIT, IDONEIDADES, OPERADORES, LABEL, TONE, toneColor,
+  type AuditTicket, type Tone, type VersionTicket,
+} from "./model/audit";
+import {
   PRODUCTOS, productoPorId, CLIENTES, clientePorRut,
   USDCLP_OBS, UF_DIA,
 } from "./model/seed";
@@ -337,6 +341,9 @@ export function App() {
           </div>
         </div>
 
+        {/* ===== COMPLIANCE · AUDIT ===== */}
+        <ComplianceAudit />
+
         {/* ===== CONTABILIDAD · RISTRAS ===== */}
         <Contabilidad par={par} tickets={st.tickets} />
 
@@ -546,6 +553,213 @@ function GrillaRegulatoria(props: { par: number }) {
           {metodo === "saccr" && <> Ej: Forward simple a 360d → PFE {fmtPct(addonFactor(360), 1)} (vs {fmtPct(addTramo, 1)} del lineal a corto): el plazo largo es mucho más ácido.</>}
           {" "}La métrica <b>PFE</b> es la que vos ves; el <b>capital</b> es la fracción que inmoviliza la CMF.
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Compliance · Audit
+// ---------------------------------------------------------------------------
+function Chip(props: { label: string; tone: Tone }) {
+  const c = toneColor[props.tone];
+  return (
+    <span style={{
+      fontFamily: "var(--font-mono)", fontSize: 9.5, padding: "1px 6px", borderRadius: 3,
+      color: c, border: "1px solid " + c + "66", whiteSpace: "nowrap", display: "inline-block",
+    }}>{props.label}</span>
+  );
+}
+
+function CompareVersiones(props: { versiones: VersionTicket[] }) {
+  const vs = props.versiones;
+  const [a, setA] = useState(vs[0].v);
+  const [b, setB] = useState(vs[vs.length - 1].v);
+  const va = vs.find((x) => x.v === a)!, vb = vs.find((x) => x.v === b)!;
+  const keys = Array.from(new Set([...Object.keys(va.snap), ...Object.keys(vb.snap)]));
+  const diffs = keys.filter((k) => String(va.snap[k]) !== String(vb.snap[k]));
+  return (
+    <div style={{ marginTop: 8 }}>
+      <div className="row-inline" style={{ gap: 8, marginBottom: 6 }}>
+        <span className="mono muted" style={{ fontSize: 11 }}>Comparar</span>
+        <select style={{ width: 70 }} value={a} onChange={(e) => setA(Number(e.target.value))}>
+          {vs.map((x) => <option key={x.v} value={x.v}>v{x.v}</option>)}
+        </select>
+        <span className="muted">vs</span>
+        <select style={{ width: 70 }} value={b} onChange={(e) => setB(Number(e.target.value))}>
+          {vs.map((x) => <option key={x.v} value={x.v}>v{x.v}</option>)}
+        </select>
+      </div>
+      {diffs.length === 0 ? (
+        <div className="muted mono" style={{ fontSize: 11 }}>Sin cambios entre v{a} y v{b}.</div>
+      ) : (
+        <table className="tbl">
+          <thead><tr><th>Campo</th><th>v{a} ({va.fecha.slice(0, 10)})</th><th>v{b} ({vb.fecha.slice(0, 10)})</th></tr></thead>
+          <tbody>
+            {diffs.map((k) => (
+              <tr key={k}>
+                <td>{k}</td>
+                <td className="neg">{String(va.snap[k])}</td>
+                <td className="pos">{String(vb.snap[k])}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
+function AuditDetalle(props: { t: AuditTicket }) {
+  const { t } = props;
+  const [hist, setHist] = useState(false);
+  const ido = IDONEIDADES.find((i) => i.empresa === t.empresa) ?? null;
+  const ult = ido && ido.versiones.length ? ido.versiones[ido.versiones.length - 1] : null;
+  return (
+    <div style={{ border: "1px solid var(--signal-deep)", borderRadius: 8, background: "var(--panel-2)", padding: 14, marginTop: 10 }}>
+      <div className="row-inline" style={{ justifyContent: "space-between", marginBottom: 8 }}>
+        <span className="mono" style={{ color: "var(--signal)", fontSize: 13 }}>{t.id} · {t.producto} · {t.lado} · US${(t.montoUsd / 1e6).toFixed(1)}M · {t.plazoDias}d</span>
+        <span className="mono muted" style={{ fontSize: 11 }}>{t.fechaHora}</span>
+      </div>
+      <div className="notice" style={{ marginBottom: 10 }}>
+        <b>Trazabilidad:</b> cerrado vía <b>{LABEL.via[t.via]}</b> por <b>{t.representante}</b> ({t.cargoRep}) en nombre de {t.empresa}; operador CDB <b>{t.operador}</b>.
+        {t.via === "llamada-mail-respaldo" && <> Llamada no grabada → respaldo por mail obligatorio adjunto.</>}
+        {" "}Al operar: requerimiento de capital <b className={t.requerimientoOk ? "safe" : "kill"}>{t.requerimientoOk ? "en regla" : "FUERA de regla"}</b> (uso Coto {fmtPct(t.usoCapital)}), línea <b>{LABEL.linea[t.linea]}</b>.
+      </div>
+
+      <div className="cols">
+        <div>
+          <div className="mono" style={{ fontSize: 10, textTransform: "uppercase", color: "var(--text-muted)", marginBottom: 6 }}>Timeline del ciclo</div>
+          {t.eventos.map((e, i) => (
+            <div key={i} style={{ display: "flex", gap: 8, paddingBottom: 8, borderLeft: "2px solid var(--border-strong)", marginLeft: 4, paddingLeft: 10, position: "relative" }}>
+              <span style={{ position: "absolute", left: -5, top: 3, width: 8, height: 8, borderRadius: "50%", background: "var(--signal)" }} />
+              <div>
+                <div className="mono" style={{ fontSize: 10.5, color: "var(--text-dim)" }}>{e.ts} · <b style={{ color: "var(--text)" }}>{e.actor}</b></div>
+                <div style={{ fontSize: 12 }}>{e.detalle}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div>
+          <div className="mono" style={{ fontSize: 10, textTransform: "uppercase", color: "var(--text-muted)", marginBottom: 6 }}>Idoneidad / Suitability</div>
+          {ult ? (
+            <div style={{ border: "1px solid var(--border-strong)", borderRadius: 6, padding: 10, background: "var(--panel-1)" }}>
+              <div className="row-inline" style={{ justifyContent: "space-between" }}>
+                <Chip label={LABEL.suit[ult.estado]} tone={TONE.suit[ult.estado]} />
+                <span className="mono muted" style={{ fontSize: 10 }}>v{ult.v} · firmada {ult.fecha}</span>
+              </div>
+              <div className="mono" style={{ fontSize: 11, marginTop: 6, lineHeight: 1.6 }}>
+                Firmante: <b>{ult.firmante}</b> ({ult.cargo}) · poder: {ult.poder}<br />
+                Aprobador externo: {ult.aprobadorExterno} · medio: {ult.medio}<br />
+                Próxima revisión: <b>{ult.proxRevision}</b>
+              </div>
+              <div style={{ marginTop: 6 }}>
+                {ult.productos.map((p) => (
+                  <span key={p.prod} style={{ marginRight: 6 }}><Chip label={p.prod + (p.aceptado ? " ✓" : " ✕")} tone={p.aceptado ? "ok" : "bad"} /></span>
+                ))}
+              </div>
+              <button className="btn ghost" style={{ marginTop: 8 }} onClick={() => setHist(!hist)}>{hist ? "Ocultar" : "Ver"} historial ({ido!.versiones.length})</button>
+              {hist && (
+                <div style={{ marginTop: 8 }}>
+                  <div className="muted mono" style={{ fontSize: 10, marginBottom: 4 }}>En el resumen solo figura la última; el detalle guarda todas:</div>
+                  {ido!.versiones.map((v) => (
+                    <div key={v.v} className="mono" style={{ fontSize: 11, padding: "3px 0", borderBottom: "1px solid var(--border-subtle)" }}>
+                      v{v.v} · {v.fecha} · {LABEL.suit[v.estado]} · {v.nota}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="notice"><span className="kill">Sin idoneidad vigente.</span> Requiere declaración antes de confirmar (cliente persona natural / fondo en proceso).</div>
+          )}
+
+          {t.versiones && t.versiones.length > 1 && (
+            <>
+              <div className="mono" style={{ fontSize: 10, textTransform: "uppercase", color: "var(--text-muted)", margin: "12px 0 2px" }}>Versiones del ticket ({t.versiones.length}) · comparar</div>
+              <CompareVersiones versiones={t.versiones} />
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ComplianceAudit() {
+  const [vista, setVista] = useState<"ticket" | "empresa" | "operador">("ticket");
+  const [filtro, setFiltro] = useState<string>("");
+  const [sel, setSel] = useState<string | null>(null);
+
+  const empresas = Array.from(new Set(AUDIT.map((t) => t.empresa)));
+  const rows = AUDIT.filter((t) =>
+    vista === "ticket" ? true : vista === "empresa" ? (!filtro || t.empresa === filtro) : (!filtro || t.operador === filtro)
+  );
+
+  return (
+    <div className="panel">
+      <div className="panel-head">
+        <h2>Compliance · Audit <span className="muted" style={{ fontWeight: 400 }}>(registro normativo auditable)</span></h2>
+        <span className="spacer" />
+        <span className="hint">CMF · legal · control interno · cada cierre trazable</span>
+      </div>
+      <div className="panel-body">
+        <div className="row-inline" style={{ marginBottom: 10, gap: 12 }}>
+          <div className="seg">
+            <button className={vista === "ticket" ? "on" : ""} onClick={() => { setVista("ticket"); setFiltro(""); }}>Por ticket</button>
+            <button className={vista === "empresa" ? "on" : ""} onClick={() => { setVista("empresa"); setFiltro(""); }}>Por empresa</button>
+            <button className={vista === "operador" ? "on" : ""} onClick={() => { setVista("operador"); setFiltro(""); }}>Por operador</button>
+          </div>
+          {vista === "empresa" && (
+            <select style={{ width: 240 }} value={filtro} onChange={(e) => setFiltro(e.target.value)}>
+              <option value="">Todas las empresas</option>
+              {empresas.map((x) => <option key={x} value={x}>{x}</option>)}
+            </select>
+          )}
+          {vista === "operador" && (
+            <select style={{ width: 240 }} value={filtro} onChange={(e) => setFiltro(e.target.value)}>
+              <option value="">Todos los operadores</option>
+              {OPERADORES.map((x) => <option key={x} value={x}>{x}</option>)}
+            </select>
+          )}
+        </div>
+
+        <div style={{ overflowX: "auto" }}>
+          <table className="tbl">
+            <thead>
+              <tr>
+                <th>ID</th><th>Operador</th><th>Producto</th><th className="num">Monto</th>
+                <th>Cliente / rep.</th><th>Vía</th><th>Req/Línea</th>
+                <th>Front</th><th>BO</th><th>Contrato</th><th>Suitability</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((t) => (
+                <tr key={t.id} style={{ cursor: "pointer", background: sel === t.id ? "var(--panel-3)" : undefined }}
+                  onClick={() => setSel(sel === t.id ? null : t.id)}>
+                  <td className="mono" style={{ color: "var(--signal)" }}>{t.id}</td>
+                  <td className="dim" style={{ fontSize: 11 }}>{t.operador}</td>
+                  <td>{t.producto}<div className="muted" style={{ fontSize: 10 }}>{t.lado}</div></td>
+                  <td className="num dim">US${(t.montoUsd / 1e6).toFixed(1)}M</td>
+                  <td>{t.empresa}<div className="muted" style={{ fontSize: 10 }}>{t.representante} · {t.cargoRep}</div></td>
+                  <td><Chip label={LABEL.via[t.via]} tone={t.via === "llamada-mail-respaldo" ? "warn" : "neutral"} /></td>
+                  <td>
+                    <span style={{ marginRight: 4 }}><Chip label={t.requerimientoOk ? "Req OK" : "Req ✕"} tone={t.requerimientoOk ? "ok" : "bad"} /></span>
+                    <Chip label={LABEL.linea[t.linea]} tone={TONE.linea[t.linea]} />
+                  </td>
+                  <td><Chip label={LABEL.confirm[t.confirmFront]} tone={TONE.confirm[t.confirmFront]} /></td>
+                  <td><Chip label={LABEL.confirm[t.confirmBO]} tone={TONE.confirm[t.confirmBO]} /></td>
+                  <td><Chip label={LABEL.contrato[t.contrato]} tone={TONE.contrato[t.contrato]} /></td>
+                  <td><Chip label={LABEL.suit[t.suit]} tone={TONE.suit[t.suit]} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div className="muted mono" style={{ fontSize: 10.5, marginTop: 6 }}>Clic en un ticket para ver el detalle: timeline del ciclo, idoneidad con historial y comparación de versiones.</div>
+
+        {sel && <AuditDetalle t={AUDIT.find((x) => x.id === sel)!} />}
       </div>
     </div>
   );
