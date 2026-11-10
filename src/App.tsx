@@ -121,14 +121,24 @@ export function App() {
   // Índices reales (USD/CLP Observado, UF) desde la fuente de la suite; fallback al seed
   const [obs, setObs] = useState(USDCLP_OBS);
   const [uf, setUf] = useState(UF_DIA);
+  const [spot, setSpot] = useState(USDCLP_OBS); // USD/CLP intradía (Google Finance)
   useEffect(() => {
     fetch("https://mindicador.cl/api")
       .then((r) => r.json())
       .then((d) => { if (d?.dolar?.valor) setObs(d.dolar.valor); if (d?.uf?.valor) setUf(d.uf.valor); })
       .catch(() => {});
+    const SPOT = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRjzyA3DLGwzLxDt8hmft80NqWOQKaMVpGIwBptjSuQIxcnizWDj5Fn3XOjXhg6OAKdlinckEW1vZ5d/pub?output=csv";
+    const loadSpot = () => fetch(SPOT).then((r) => r.text()).then((t) => {
+      const first = t.split(/\r?\n/)[0].replace(/"/g, "").trim();
+      const v = parseFloat(first.replace(/\./g, "").replace(",", "."));
+      if (isFinite(v) && v > 0) setSpot(v);
+    }).catch(() => {});
+    loadSpot();
+    const id = setInterval(loadSpot, 60000);
+    return () => clearInterval(id);
   }, []);
-  const rt = useLiveRate(obs);
-  const par = obs; // conversiones de montos con el observado real
+  const rt = spot; // USD/CLP tiempo real (Google Finance vía hoja publicada)
+  const par = obs; // conversiones con el Observado (base contable estable)
 
   // ---- estados de pozos ----
   const eCoto = estadoPozo(st.pozoCoto);
