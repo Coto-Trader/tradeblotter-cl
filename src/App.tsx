@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } fr
 import {
   calcularTicket, veredicto, estadoPozo, addonPct,
   fmtMoney, fmtPct, CSS_NIVEL, PARAMS_CMF,
-  type Moneda, type Nivel,
+  type Moneda, type Nivel, type Producto,
 } from "./engine/capital";
 import { store, type Ticket } from "./engine/store";
 import {
@@ -162,8 +162,8 @@ export function App() {
           />
         </div>
 
-        {/* ===== GRILLA BASE (la que manda) ===== */}
-        <GrillaBase par={par} />
+        {/* ===== GRILLA REGULATORIA (la que manda) ===== */}
+        <GrillaRegulatoria par={par} />
 
         {/* ===== QUICK QUOTE ===== */}
         <div className="panel">
@@ -405,69 +405,96 @@ function CascadaPozo(props: {
   );
 }
 
-// Grilla base de referencia: consumo por nocional estándar, por plazo y moneda.
-const TENORS_REF = [7, 15, 30, 60, 90, 120, 180, 360];
+// Grilla regulatoria: requerimiento por producto y plazo, factores CMF a la vista.
+const sumFactor = (p: Producto) => p.patas.reduce((s, x) => s + x.factor, 0);
+const BANDAS = [
+  { k: "≤ 15d", tenor: 7 },
+  { k: "15–90d", tenor: 30 },
+  { k: "> 90d", tenor: 180 },
+];
 
-function GrillaBase(props: { par: number }) {
+function GrillaRegulatoria(props: { par: number }) {
   const { par } = props;
+  const [disp, setDisp] = useState<"pct" | "usd" | "clp">("pct");
   const [notional, setNotional] = useState(1_000_000);
-  const [prodId, setProdId] = useState(PRODUCTOS[0].id);
-  const [modo, setModo] = useState<"patas" | "estructura">("patas");
-  const producto = productoPorId(prodId);
-  const rows = TENORS_REF.map((t) => {
-    const c = calcularTicket(producto, notional, t, modo);
-    return { t, addon: c.addon, expUsd: c.exposicionUsd, reqUsd: c.requerimientoUsd };
-  });
-  const maxReq = Math.max(1, ...rows.map((r) => r.reqUsd));
+  const [capReq, setCapReq] = useState(3);     // % del APR
+  const [addGen, setAddGen] = useState(1.5);   // % add-on general
+  const [addTramo, setAddTramo] = useState(1.0); // % add-on tramo 15–90d
+  const [mtm, setMtm] = useState(0);           // % del nocional (posición viva)
+  const weight = 100;                           // ponderador corporativo
+
+  const addonBanda = (tenor: number) => (tenor >= 15 && tenor <= 90 ? addTramo : addGen);
+  // Requerimiento % de nocional = capReq% × [(ΣfactorPatas × add-on% + MtM%) × ponderador%]
+  const reqPct = (p: Producto, tenor: number) =>
+    (capReq / 100) * (((sumFactor(p) * addonBanda(tenor)) / 100 + mtm / 100) * (weight / 100)) * 100;
+
+  const cell = (p: Producto, tenor: number) => {
+    const rp = reqPct(p, tenor);
+    if (disp === "pct") return fmtPct(rp, 3);
+    const usd = (rp / 100) * notional;
+    return fmtMoney(usd, disp === "usd" ? "USD" : "CLP", par);
+  };
+
   return (
     <div className="panel">
       <div className="panel-head">
-        <h2>Grilla base · consumo por nocional <span className="muted" style={{ fontWeight: 400 }}>(la que manda)</span></h2>
+        <h2>Grilla regulatoria CMF · requerimiento por producto y plazo <span className="muted" style={{ fontWeight: 400 }}>(la que manda)</span></h2>
         <span className="spacer" />
-        <span className="hint">requerimiento CMF + exposición por plazo · USD/CLP</span>
+        <span className="hint">NCG 562 · auditable</span>
       </div>
       <div className="panel-body">
-        <div className="grid c3" style={{ marginBottom: 12 }}>
-          <label className="field"><span className="lbl">Nocional ref. USD</span>
-            <input type="number" value={notional} step={100000} onChange={(e) => setNotional(Number(e.target.value))} /></label>
-          <label className="field"><span className="lbl">Producto</span>
-            <select value={prodId} onChange={(e) => setProdId(e.target.value)}>
-              {PRODUCTOS.map((p) => <option key={p.id} value={p.id}>{p.nombre}</option>)}
-            </select></label>
-          <label className="field"><span className="lbl">Add-on por</span>
-            <div className="seg">
-              <button className={modo === "patas" ? "on" : ""} onClick={() => setModo("patas")}>Patas</button>
-              <button className={modo === "estructura" ? "on" : ""} onClick={() => setModo("estructura")}>Estructura</button>
-            </div>
-          </label>
+        {/* Fórmula + parámetros editables (auditoría) */}
+        <div className="notice" style={{ marginBottom: 12 }}>
+          <b>Requerimiento = capReq% × [ (MtM + Σ add-on patas) × ponderador ]</b> · exposición (EAD) = <b>MtM + add-on</b> (PFE).
+          El % es sobre el nocional y no depende de la moneda; en CLP/USD multiplica por el nocional.
         </div>
+        <div className="grid c4" style={{ marginBottom: 10 }}>
+          <label className="field"><span className="lbl">capReq % (3% APR)</span>
+            <input type="number" step={0.5} value={capReq} onChange={(e) => setCapReq(Number(e.target.value))} /></label>
+          <label className="field"><span className="lbl">Add-on general %</span>
+            <input type="number" step={0.1} value={addGen} onChange={(e) => setAddGen(Number(e.target.value))} /></label>
+          <label className="field"><span className="lbl">Add-on 15–90d %</span>
+            <input type="number" step={0.1} value={addTramo} onChange={(e) => setAddTramo(Number(e.target.value))} /></label>
+          <label className="field"><span className="lbl">MtM % (posición viva)</span>
+            <input type="number" step={0.1} value={mtm} onChange={(e) => setMtm(Number(e.target.value))} /></label>
+        </div>
+        <div className="row-inline" style={{ marginBottom: 12, justifyContent: "space-between" }}>
+          <div className="seg">
+            <button className={disp === "pct" ? "on" : ""} onClick={() => setDisp("pct")}>% nocional</button>
+            <button className={disp === "usd" ? "on" : ""} onClick={() => setDisp("usd")}>USD / nocional</button>
+            <button className={disp === "clp" ? "on" : ""} onClick={() => setDisp("clp")}>CLP / nocional</button>
+          </div>
+          {disp !== "pct" && (
+            <label className="field" style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+              <span className="lbl">Nocional ref.</span>
+              <input type="number" style={{ width: 150 }} step={100000} value={notional} onChange={(e) => setNotional(Number(e.target.value))} />
+            </label>
+          )}
+        </div>
+
         <table className="tbl">
           <thead>
             <tr>
-              <th>Plazo</th><th className="num">Add-on</th>
-              <th className="num">Exposición USD</th><th className="num">Exposición CLP</th>
-              <th className="num">Req. CMF USD</th><th className="num">Req. CMF CLP</th><th></th>
+              <th>Producto</th><th className="num">Patas</th>
+              {BANDAS.map((b) => (
+                <th key={b.k} className="num">{b.k} <span className="muted">({fmtPct(addonBanda(b.tenor), 1)})</span></th>
+              ))}
             </tr>
           </thead>
           <tbody>
-            {rows.map((r) => {
-              const tramo = r.addon === PARAMS_CMF.addonTramoPct;
-              return (
-                <tr key={r.t}>
-                  <td>{r.t}d {tramo && <span className="badge coto" style={{ marginLeft: 4 }}>15–90</span>}</td>
-                  <td className="num">{fmtPct(r.addon * 100, 1)}</td>
-                  <td className="num dim">{fmtMoney(r.expUsd, "USD", par)}</td>
-                  <td className="num dim">{fmtMoney(r.expUsd, "CLP", par)}</td>
-                  <td className="num" style={{ color: "var(--signal)" }}>{fmtMoney(r.reqUsd, "USD", par)}</td>
-                  <td className="num" style={{ color: "var(--signal)" }}>{fmtMoney(r.reqUsd, "CLP", par)}</td>
-                  <td style={{ width: 70 }}><span className="cellbar" style={{ width: (r.reqUsd / maxReq) * 60 + "px" }} /></td>
-                </tr>
-              );
-            })}
+            {PRODUCTOS.map((p) => (
+              <tr key={p.id}>
+                <td>{p.nombre}<div className="muted mono" style={{ fontSize: 10 }}>{p.desc}</div></td>
+                <td className="num dim">{p.patas.length} · Σ{sumFactor(p).toFixed(1)}</td>
+                {BANDAS.map((b) => (
+                  <td key={b.k} className="num" style={{ color: "var(--signal)" }}>{cell(p, b.tenor)}</td>
+                ))}
+              </tr>
+            ))}
           </tbody>
         </table>
         <div className="notice" style={{ marginTop: 10 }}>
-          Lectura rápida: cuánto capital inmoviliza <b>US${notional.toLocaleString("en-US")}</b> de <b>{producto.nombre}</b> según el plazo. El tramo <b>15–90d</b> calibra el add-on a 1,0%.
+          Base a <b>MtM = {fmtPct(mtm, 1)}</b>. En posiciones vivas el MtM se suma a la exposición (APR) y sube el requerimiento. Add-on: <b>≤15d / &gt;90d {fmtPct(addGen, 1)}</b> · <b>15–90d {fmtPct(addTramo, 1)}</b> (calibración interbancaria) · ponderador corporativo <b>{weight}%</b>.
         </div>
       </div>
     </div>
