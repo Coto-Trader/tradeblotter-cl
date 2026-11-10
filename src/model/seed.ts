@@ -5,6 +5,30 @@ import type { Producto, Pozo } from "../engine/capital";
 // ---------------------------------------------------------------------------
 export const PRODUCTOS: Producto[] = [
   {
+    id: "spot",
+    nombre: "Spot USD/CLP",
+    desc: "Contado T+0/T+1/T+2 (riesgo de liquidación)",
+    patas: [{ tipo: "spot", lado: "venta", factor: 0.0 }],
+  },
+  {
+    id: "fwd_simple",
+    nombre: "Forward simple",
+    desc: "Fwd USD/CLP",
+    patas: [{ tipo: "fwd", lado: "venta", factor: 1.0 }],
+  },
+  {
+    id: "call",
+    nombre: "Opción Call (compra)",
+    desc: "Compra de call USD/CLP",
+    patas: [{ tipo: "call", lado: "compra", factor: 1.0 }],
+  },
+  {
+    id: "put",
+    nombre: "Opción Put (compra)",
+    desc: "Compra de put USD/CLP",
+    patas: [{ tipo: "put", lado: "compra", factor: 1.0 }],
+  },
+  {
     id: "fwd_mej_import",
     nombre: "FWD Mejorado Import",
     desc: "Fwd venta USD + Compra Call",
@@ -28,14 +52,6 @@ export const PRODUCTOS: Producto[] = [
     desc: "Depósito + venta de opción (prima)",
     patas: [
       { tipo: "call", lado: "venta", factor: 1.0 },
-    ],
-  },
-  {
-    id: "fwd_simple",
-    nombre: "Forward simple",
-    desc: "Fwd USD/CLP",
-    patas: [
-      { tipo: "fwd", lado: "venta", factor: 1.0 },
     ],
   },
 ];

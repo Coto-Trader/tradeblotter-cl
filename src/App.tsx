@@ -405,96 +405,142 @@ function CascadaPozo(props: {
   );
 }
 
-// Grilla regulatoria: requerimiento por producto y plazo, factores CMF a la vista.
+// Grilla de consumo por producto y plazo (PFE + capital), método lineal o SA-CCR.
 const sumFactor = (p: Producto) => p.patas.reduce((s, x) => s + x.factor, 0);
-const BANDAS = [
-  { k: "≤ 15d", tenor: 7 },
-  { k: "15–90d", tenor: 30 },
-  { k: "> 90d", tenor: 180 },
-];
+const TENORS_COL = [30, 90, 180, 360, 720];
+type Metodo = "lineal" | "saccr";
+type Metrica = "pfe_pct" | "req_pct" | "pfe_mon" | "req_mon";
 
 function GrillaRegulatoria(props: { par: number }) {
   const { par } = props;
-  const [disp, setDisp] = useState<"pct" | "usd" | "clp">("pct");
+  const [metodo, setMetodo] = useState<Metodo>("saccr");
+  const [metrica, setMetrica] = useState<Metrica>("pfe_pct");
+  const [cur, setCur] = useState<"USD" | "CLP">("USD");
   const [notional, setNotional] = useState(1_000_000);
   const [capReq, setCapReq] = useState(3);     // % del APR
-  const [addGen, setAddGen] = useState(1.5);   // % add-on general
-  const [addTramo, setAddTramo] = useState(1.0); // % add-on tramo 15–90d
+  const [addGen, setAddGen] = useState(1.5);   // % add-on lineal general
+  const [addTramo, setAddTramo] = useState(1.0); // % add-on lineal tramo 15–90d
+  const [sf, setSf] = useState(4.0);           // % factor supervisor SA-CCR (FX)
   const [mtm, setMtm] = useState(0);           // % del nocional (posición viva)
   const weight = 100;                           // ponderador corporativo
 
-  const addonBanda = (tenor: number) => (tenor >= 15 && tenor <= 90 ? addTramo : addGen);
-  // Requerimiento % de nocional = capReq% × [(ΣfactorPatas × add-on% + MtM%) × ponderador%]
-  const reqPct = (p: Producto, tenor: number) =>
-    (capReq / 100) * (((sumFactor(p) * addonBanda(tenor)) / 100 + mtm / 100) * (weight / 100)) * 100;
-
-  const cell = (p: Producto, tenor: number) => {
-    const rp = reqPct(p, tenor);
-    if (disp === "pct") return fmtPct(rp, 3);
-    const usd = (rp / 100) * notional;
-    return fmtMoney(usd, disp === "usd" ? "USD" : "CLP", par);
+  // add-on % del nocional por pata, según método y plazo
+  const addonFactor = (tenor: number) => {
+    if (metodo === "saccr") {
+      const mf = Math.sqrt(Math.min(tenor, 360) / 360); // maturity factor, tope 1 año
+      return sf * mf;
+    }
+    return tenor >= 15 && tenor <= 90 ? addTramo : addGen;
   };
+  const pfePct = (p: Producto, tenor: number) => sumFactor(p) * addonFactor(tenor); // exposición add-on (antes de MtM)
+  const reqPct = (p: Producto, tenor: number) =>
+    (capReq / 100) * ((pfePct(p, tenor) + mtm) * (weight / 100)); // % de nocional
+
+  const esMonto = metrica === "pfe_mon" || metrica === "req_mon";
+  const cell = (p: Producto, tenor: number) => {
+    const pfe = pfePct(p, tenor), req = reqPct(p, tenor);
+    if (metrica === "pfe_pct") return fmtPct(pfe, 2);
+    if (metrica === "req_pct") return fmtPct(req, 3);
+    const pct = metrica === "pfe_mon" ? pfe : req;
+    return fmtMoney((pct / 100) * notional, cur, par);
+  };
+  const colAp = (tenor: number) => fmtPct(addonFactor(tenor), metodo === "saccr" ? 2 : 1);
 
   return (
     <div className="panel">
       <div className="panel-head">
-        <h2>Grilla regulatoria CMF · requerimiento por producto y plazo <span className="muted" style={{ fontWeight: 400 }}>(la que manda)</span></h2>
+        <h2>Consumo por producto y plazo <span className="muted" style={{ fontWeight: 400 }}>(PFE + capital · la que manda)</span></h2>
         <span className="spacer" />
-        <span className="hint">NCG 562 · auditable</span>
+        <span className="hint">operar esto consume esto · CMF NCG 562 / SA-CCR</span>
       </div>
       <div className="panel-body">
-        {/* Fórmula + parámetros editables (auditoría) */}
         <div className="notice" style={{ marginBottom: 12 }}>
-          <b>Requerimiento = capReq% × [ (MtM + Σ add-on patas) × ponderador ]</b> · exposición (EAD) = <b>MtM + add-on</b> (PFE).
-          El % es sobre el nocional y no depende de la moneda; en CLP/USD multiplica por el nocional.
+          <b>PFE (exposición add-on)</b> = Σ patas × add-on%(plazo) — lo que ocupás. <b>Capital</b> = capReq% × (PFE + MtM) × ponderador — mucho menor.
+          {metodo === "saccr"
+            ? <> SA-CCR: add-on = factor supervisor × √(plazo/1año) — escala con el plazo (real y más ácido).</>
+            : <> Lineal: add-on plano por tramo (simple).</>}
         </div>
-        <div className="grid c4" style={{ marginBottom: 10 }}>
-          <label className="field"><span className="lbl">capReq % (3% APR)</span>
-            <input type="number" step={0.5} value={capReq} onChange={(e) => setCapReq(Number(e.target.value))} /></label>
-          <label className="field"><span className="lbl">Add-on general %</span>
-            <input type="number" step={0.1} value={addGen} onChange={(e) => setAddGen(Number(e.target.value))} /></label>
-          <label className="field"><span className="lbl">Add-on 15–90d %</span>
-            <input type="number" step={0.1} value={addTramo} onChange={(e) => setAddTramo(Number(e.target.value))} /></label>
-          <label className="field"><span className="lbl">MtM % (posición viva)</span>
-            <input type="number" step={0.1} value={mtm} onChange={(e) => setMtm(Number(e.target.value))} /></label>
-        </div>
-        <div className="row-inline" style={{ marginBottom: 12, justifyContent: "space-between" }}>
-          <div className="seg">
-            <button className={disp === "pct" ? "on" : ""} onClick={() => setDisp("pct")}>% nocional</button>
-            <button className={disp === "usd" ? "on" : ""} onClick={() => setDisp("usd")}>USD / nocional</button>
-            <button className={disp === "clp" ? "on" : ""} onClick={() => setDisp("clp")}>CLP / nocional</button>
+        <div className="row-inline" style={{ marginBottom: 10, gap: 14 }}>
+          <div>
+            <span className="lbl" style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--text-muted)", display: "block", marginBottom: 3 }}>Método add-on</span>
+            <div className="seg">
+              <button className={metodo === "saccr" ? "on" : ""} onClick={() => setMetodo("saccr")}>SA-CCR</button>
+              <button className={metodo === "lineal" ? "on" : ""} onClick={() => setMetodo("lineal")}>Lineal</button>
+            </div>
           </div>
-          {disp !== "pct" && (
-            <label className="field" style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-              <span className="lbl">Nocional ref.</span>
-              <input type="number" style={{ width: 150 }} step={100000} value={notional} onChange={(e) => setNotional(Number(e.target.value))} />
-            </label>
+          <div>
+            <span className="lbl" style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--text-muted)", display: "block", marginBottom: 3 }}>Métrica</span>
+            <div className="seg">
+              <button className={metrica === "pfe_pct" ? "on" : ""} onClick={() => setMetrica("pfe_pct")}>PFE %</button>
+              <button className={metrica === "pfe_mon" ? "on" : ""} onClick={() => setMetrica("pfe_mon")}>PFE $</button>
+              <button className={metrica === "req_pct" ? "on" : ""} onClick={() => setMetrica("req_pct")}>Cap %</button>
+              <button className={metrica === "req_mon" ? "on" : ""} onClick={() => setMetrica("req_mon")}>Cap $</button>
+            </div>
+          </div>
+          {esMonto && (
+            <>
+              <div>
+                <span className="lbl" style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--text-muted)", display: "block", marginBottom: 3 }}>Moneda</span>
+                <div className="seg"><button className={cur === "USD" ? "on" : ""} onClick={() => setCur("USD")}>USD</button><button className={cur === "CLP" ? "on" : ""} onClick={() => setCur("CLP")}>CLP</button></div>
+              </div>
+              <label className="field" style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                <span className="lbl">Nocional</span>
+                <input type="number" style={{ width: 140 }} step={100000} value={notional} onChange={(e) => setNotional(Number(e.target.value))} />
+              </label>
+            </>
           )}
         </div>
 
-        <table className="tbl">
-          <thead>
-            <tr>
-              <th>Producto</th><th className="num">Patas</th>
-              {BANDAS.map((b) => (
-                <th key={b.k} className="num">{b.k} <span className="muted">({fmtPct(addonBanda(b.tenor), 1)})</span></th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {PRODUCTOS.map((p) => (
-              <tr key={p.id}>
-                <td>{p.nombre}<div className="muted mono" style={{ fontSize: 10 }}>{p.desc}</div></td>
-                <td className="num dim">{p.patas.length} · Σ{sumFactor(p).toFixed(1)}</td>
-                {BANDAS.map((b) => (
-                  <td key={b.k} className="num" style={{ color: "var(--signal)" }}>{cell(p, b.tenor)}</td>
+        {/* parámetros editables (auditoría / escenario ácido) */}
+        <div className="grid c4" style={{ marginBottom: 12 }}>
+          <label className="field"><span className="lbl">capReq % (APR)</span>
+            <input type="number" step={0.5} value={capReq} onChange={(e) => setCapReq(Number(e.target.value))} /></label>
+          {metodo === "saccr" ? (
+            <label className="field"><span className="lbl">Factor superv. SA-CCR %</span>
+              <input type="number" step={0.5} value={sf} onChange={(e) => setSf(Number(e.target.value))} /></label>
+          ) : (
+            <label className="field"><span className="lbl">Add-on general %</span>
+              <input type="number" step={0.1} value={addGen} onChange={(e) => setAddGen(Number(e.target.value))} /></label>
+          )}
+          {metodo === "saccr" ? (
+            <label className="field"><span className="lbl">ponderador %</span>
+              <input type="number" value={weight} readOnly /></label>
+          ) : (
+            <label className="field"><span className="lbl">Add-on 15–90d %</span>
+              <input type="number" step={0.1} value={addTramo} onChange={(e) => setAddTramo(Number(e.target.value))} /></label>
+          )}
+          <label className="field"><span className="lbl">MtM % (posición viva)</span>
+            <input type="number" step={0.1} value={mtm} onChange={(e) => setMtm(Number(e.target.value))} /></label>
+        </div>
+
+        <div style={{ overflowX: "auto" }}>
+          <table className="tbl">
+            <thead>
+              <tr>
+                <th>Producto</th><th className="num">Patas</th>
+                {TENORS_COL.map((t) => (
+                  <th key={t} className="num">{t}d <span className="muted">({colAp(t)})</span></th>
                 ))}
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {PRODUCTOS.map((p) => (
+                <tr key={p.id}>
+                  <td>{p.nombre}<div className="muted mono" style={{ fontSize: 10 }}>{p.desc}</div></td>
+                  <td className="num dim">Σ{sumFactor(p).toFixed(1)}</td>
+                  {TENORS_COL.map((t) => (
+                    <td key={t} className="num" style={{ color: "var(--signal)" }}>{cell(p, t)}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
         <div className="notice" style={{ marginTop: 10 }}>
-          Base a <b>MtM = {fmtPct(mtm, 1)}</b>. En posiciones vivas el MtM se suma a la exposición (APR) y sube el requerimiento. Add-on: <b>≤15d / &gt;90d {fmtPct(addGen, 1)}</b> · <b>15–90d {fmtPct(addTramo, 1)}</b> (calibración interbancaria) · ponderador corporativo <b>{weight}%</b>.
+          Lectura: cada celda es el <b>{metrica.startsWith("pfe") ? "PFE (exposición)" : "capital requerido"}</b> de operar ese producto a ese plazo
+          {esMonto ? <> para <b>{fmtMoney(notional, cur, par)}</b> de nocional</> : <> como % del nocional</>}.
+          {metodo === "saccr" && <> Ej: Forward simple a 360d → PFE {fmtPct(addonFactor(360), 1)} (vs {fmtPct(addTramo, 1)} del lineal a corto): el plazo largo es mucho más ácido.</>}
+          {" "}La métrica <b>PFE</b> es la que vos ves; el <b>capital</b> es la fracción que inmoviliza la CMF.
         </div>
       </div>
     </div>
