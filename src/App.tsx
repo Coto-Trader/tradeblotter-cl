@@ -42,9 +42,82 @@ function useLiveRate(base: number) {
   return r;
 }
 
+// ---------------------------------------------------------------------------
+// Router por hash (robusto en GitHub Pages) + hub
+// ---------------------------------------------------------------------------
+type Route = "" | "requercapital" | "blotter" | "conta" | "complianceaudit";
+const ROUTES: { key: Route; label: string }[] = [
+  { key: "", label: "Inicio" },
+  { key: "requercapital", label: "RequerCapital · CMF" },
+  { key: "blotter", label: "Blotter de Tickets" },
+  { key: "conta", label: "Contabilidad" },
+  { key: "complianceaudit", label: "Compliance · Audit" },
+];
+
+function useHashRoute() {
+  const parse = (): Route => {
+    const seg = (location.hash.replace(/^#\/?/, "").split(/[/?]/)[0] || "").toLowerCase();
+    return (["requercapital", "blotter", "conta", "complianceaudit"].includes(seg) ? seg : "") as Route;
+  };
+  const [route, setRoute] = useState<Route>(parse());
+  useEffect(() => {
+    const on = () => { setRoute(parse()); window.scrollTo(0, 0); };
+    window.addEventListener("hashchange", on);
+    return () => window.removeEventListener("hashchange", on);
+  }, []);
+  const nav = (r: Route) => { location.hash = r ? "#/" + r : "#/"; };
+  return [route, nav] as const;
+}
+
+function TopNav(props: { route: Route; nav: (r: Route) => void }) {
+  return (
+    <div style={{ display: "flex", gap: 2, alignItems: "center", padding: "0 16px", background: "var(--panel-1)", borderBottom: "1px solid var(--border)", overflowX: "auto" }}>
+      {ROUTES.map((r) => (
+        <button key={r.key} onClick={() => props.nav(r.key)} style={{
+          appearance: "none", background: "transparent", border: "none", cursor: "pointer",
+          fontFamily: "var(--font-mono)", fontSize: 11.5, letterSpacing: ".04em", textTransform: "uppercase",
+          padding: "11px 12px", whiteSpace: "nowrap",
+          color: props.route === r.key ? "var(--signal)" : "var(--text-dim)",
+          borderBottom: "2px solid " + (props.route === r.key ? "var(--signal)" : "transparent"),
+        }}>{r.label}</button>
+      ))}
+    </div>
+  );
+}
+
+function Landing(props: { nav: (r: Route) => void }) {
+  const tools: { key: Route; nm: string; tag: string; desc: string; go: string }[] = [
+    { key: "requercapital", nm: "RequerCapital", tag: "CMF NCG 562", desc: "Simulador de requerimiento, grilla de consumo por producto y plazo (SA-CCR), doble pozo CDB/Coto y hard-stop. El control que asegura no reventar la corredora.", go: "Abrir RequerCapital" },
+    { key: "blotter", nm: "Blotter de Tickets", tag: "Operaciones", desc: "Estructuras madre cerradas: cliente, producto, nocional, plazo, exposición y requerimiento por ticket.", go: "Abrir Blotter" },
+    { key: "conta", nm: "Contabilidad · Ristras", tag: "Ristras pasivas", desc: "Ristras y asientos por hito (apertura, valorización, liquidación), doble partida que cuadra, pipe/JSON exportable. El ERP ratifica.", go: "Abrir Contabilidad" },
+    { key: "complianceaudit", nm: "Compliance · Audit", tag: "CMF · legal", desc: "Registro normativo auditable: trazabilidad de cada cierre, timeline, idoneidad/suitability con versiones y comparación de versiones del ticket.", go: "Abrir Compliance" },
+  ];
+  return (
+    <div>
+      <div className="header" style={{ border: "none", background: "none", padding: "6px 0 14px" }}>
+        <h1 style={{ fontSize: 26 }}>Trade<span className="accent">Blotter</span></h1>
+        <div className="sub">Herramientas independientes sobre una misma mesa — elegí por dónde entrar.</div>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(240px,1fr))", gap: 12 }}>
+        {tools.map((t) => (
+          <div key={t.key} onClick={() => props.nav(t.key)} className="pool" style={{ cursor: "pointer" }}>
+            <div className="top">
+              <span className="nm">{t.nm}</span><span className="spacer" />
+              <span className="badge coto">{t.tag}</span>
+            </div>
+            <div style={{ color: "var(--text-dim)", fontSize: 12.5, lineHeight: 1.5, minHeight: 78 }}>{t.desc}</div>
+            <div style={{ marginTop: 10, fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--signal)" }}>{t.go} →</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function App() {
   const st = useStore();
   const rt = useLiveRate(USDCLP_OBS);
+  const [route, nav] = useHashRoute();
   const [moneda, setMoneda] = useState<Moneda>("CLP");
   const par = USDCLP_OBS; // conversiones de montos con el observado (estable)
 
@@ -111,8 +184,10 @@ export function App() {
         <span className="mono" style={{ fontSize: 10, color: "var(--text-muted)" }}>Capital & Riesgo · CMF NCG 562</span>
       </div>
 
-      {/* Tape / indicador */}
-      <div className="tape">
+      <TopNav route={route} nav={nav} />
+
+      {/* Tape / indicador (solo RequerCapital) */}
+      {route === "requercapital" && <div className="tape">
         <div className="cell"><span className="k">USD/CLP Obs.</span><span className="v">{USDCLP_OBS.toFixed(1)}</span></div>
         <div className="cell"><span className="k">USD/CLP Real Time</span><span className={"v " + (rt >= USDCLP_OBS ? "up" : "down")}>{rt.toFixed(2)} {rt >= USDCLP_OBS ? "▲" : "▼"}</span></div>
         <div className="cell"><span className="k">UF del día</span><span className="v">{UF_DIA.toLocaleString("es-CL")}</span></div>
@@ -126,14 +201,17 @@ export function App() {
             <button className={moneda === "USD" ? "on" : ""} onClick={() => setMoneda("USD")}>USD</button>
           </div>
         </div>
-      </div>
+      </div>}
 
-      <div className="header">
-        <h1>Trade<span className="accent">Blotter</span> · Control de Consumo de Capital</h1>
+      {route === "requercapital" && <div className="header">
+        <h1>Trade<span className="accent">Blotter</span> · RequerCapital <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>CMF NCG 562</span></h1>
         <div className="sub">Doble pozo CDB / Coto · requerimiento CMF manda, exposición add-on al lado · hard-stop si revienta la CDB o la línea</div>
-      </div>
+      </div>}
 
       <div className="main">
+        {route === "" && <Landing nav={nav} />}
+
+        {route === "requercapital" && (<>
         {/* ===== POZOS ===== */}
         <div className="cols">
           <PoolCard
@@ -302,8 +380,10 @@ export function App() {
           <MatrizConsumo tickets={st.tickets} M={M} />
           <ClientesGrid M={M} />
         </div>
+        </>)}
 
         {/* ===== BLOTTER ===== */}
+        {route === "blotter" && (
         <div className="panel">
           <div className="panel-head">
             <h2>Blotter · Estructuras madre cerradas</h2>
@@ -313,7 +393,7 @@ export function App() {
           </div>
           <div className="panel-body">
             {st.tickets.length === 0 ? (
-              <div className="empty">Sin tickets cerrados. Simulá y cerrá uno arriba.</div>
+              <div className="empty">Sin tickets cerrados. Simulá y cerrá uno en RequerCapital.</div>
             ) : (
               <table className="tbl">
                 <thead>
@@ -340,17 +420,17 @@ export function App() {
             )}
           </div>
         </div>
+        )}
 
         {/* ===== COMPLIANCE · AUDIT ===== */}
-        <ComplianceAudit />
+        {route === "complianceaudit" && <ComplianceAudit />}
 
         {/* ===== CONTABILIDAD · RISTRAS ===== */}
-        <Contabilidad par={par} tickets={st.tickets} />
+        {route === "conta" && <Contabilidad par={par} tickets={st.tickets} />}
 
-        <div className="notice" style={{ marginBottom: 24 }}>
-          <b>Fase 1 (hoy):</b> consumo de capital, doble pozo y hard-stop. <b>Fase 2 (tras contratación):</b> splits en cascada, utilidades, ristras y asientos contables. ·
-          Demo: pozos editables + feed RT simulado; el motor CMF corre en USD y convierte a CLP con el observado.
-        </div>
+        {route === "requercapital" && <div className="notice" style={{ marginBottom: 24 }}>
+          <b>Demo:</b> pozos editables + feed RT simulado; el motor CMF corre en USD y convierte a CLP con el observado. Cada herramienta vive en su propia sección (menú arriba).
+        </div>}
       </div>
     </div>
   );
