@@ -103,5 +103,5 @@ export const POZO_CDB_SEED: Pozo = {
 };
 
 // Paridad USD/CLP (observado y tiempo real base; el RT tickea en runtime)
-export const USDCLP_OBS = 945.3;
-export const UF_DIA = 38_420;
+export const USDCLP_OBS = 969.8;  // fallback (real al 2026-11-10); en runtime se reemplaza por mindicador
+export const UF_DIA = 41_302;     // fallback; en runtime se reemplaza por mindicador

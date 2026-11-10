@@ -116,10 +116,19 @@ function Landing(props: { nav: (r: Route) => void }) {
 
 export function App() {
   const st = useStore();
-  const rt = useLiveRate(USDCLP_OBS);
   const [route, nav] = useHashRoute();
   const [moneda, setMoneda] = useState<Moneda>("CLP");
-  const par = USDCLP_OBS; // conversiones de montos con el observado (estable)
+  // Índices reales (USD/CLP Observado, UF) desde la fuente de la suite; fallback al seed
+  const [obs, setObs] = useState(USDCLP_OBS);
+  const [uf, setUf] = useState(UF_DIA);
+  useEffect(() => {
+    fetch("https://mindicador.cl/api")
+      .then((r) => r.json())
+      .then((d) => { if (d?.dolar?.valor) setObs(d.dolar.valor); if (d?.uf?.valor) setUf(d.uf.valor); })
+      .catch(() => {});
+  }, []);
+  const rt = useLiveRate(obs);
+  const par = obs; // conversiones de montos con el observado real
 
   // ---- estados de pozos ----
   const eCoto = estadoPozo(st.pozoCoto);
@@ -188,9 +197,9 @@ export function App() {
 
       {/* Tape / indicador (solo RequerCapital) */}
       {route === "requercapital" && <div className="tape">
-        <div className="cell"><span className="k">USD/CLP Obs.</span><span className="v">{USDCLP_OBS.toFixed(1)}</span></div>
-        <div className="cell"><span className="k">USD/CLP Real Time</span><span className={"v " + (rt >= USDCLP_OBS ? "up" : "down")}>{rt.toFixed(2)} {rt >= USDCLP_OBS ? "▲" : "▼"}</span></div>
-        <div className="cell"><span className="k">UF del día</span><span className="v">{UF_DIA.toLocaleString("es-CL")}</span></div>
+        <div className="cell"><span className="k">USD/CLP Obs.</span><span className="v">{obs.toFixed(1)}</span></div>
+        <div className="cell"><span className="k">USD/CLP Real Time</span><span className={"v " + (rt >= obs ? "up" : "down")}>{rt.toFixed(2)} {rt >= obs ? "▲" : "▼"}</span></div>
+        <div className="cell"><span className="k">UF del día</span><span className="v">{Math.round(uf).toLocaleString("es-CL")}</span></div>
         <div className="cell gauge"><span className="k">% Uso Capital Corredora</span><span className={"v " + CSS_NIVEL[eCdb.nivel]}>{fmtPct(pctCDBrt)}</span></div>
         <div className="cell gauge"><span className="k">% Uso Capital Coto</span><span className={"v " + CSS_NIVEL[eCoto.nivel]}>{fmtPct(pctCotoRt)}</span></div>
         <span className="spacer" />
